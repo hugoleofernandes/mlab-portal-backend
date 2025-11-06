@@ -1,0 +1,6 @@
+@MLab.Portal.Bff_HostAddress = http://localhost:5166
+
+GET {{MLab.Portal.Bff_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
