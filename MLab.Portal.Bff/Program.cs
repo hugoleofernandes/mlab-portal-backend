@@ -1,8 +1,8 @@
 using System.Security.Claims;
-using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.IdentityModel.Protocols.OpenIdConnect;
+using MLab.Portal.Bff.Security.Csrf;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -80,6 +80,29 @@ builder.Services
                 var ui = cfg["UiLocales"] ?? "pt-BR";
                 ctx.ProtocolMessage.SetParameter("ui_locales", ui);
                 return Task.CompletedTask;
+            },
+            OnTokenValidated = ctx =>
+            {
+                var http = ctx.HttpContext;
+
+                // Gera token XSRF assim que login é validado
+                var xsrfToken = Guid.NewGuid().ToString("N");
+
+                http.Response.Cookies.Append("XSRF-TOKEN", xsrfToken, new CookieOptions
+                {
+                    HttpOnly = false, // JS pode ler
+                    Secure = true, // Apenas HTTPS
+                    SameSite = SameSiteMode.None,
+                    Path = "/" // disponível para todo o app
+                });
+
+                // Log opcional
+                var user = ctx.Principal?.Identity?.Name ?? "Desconhecido";
+                var logger = http.RequestServices.GetRequiredService<ILoggerFactory>()
+                    .CreateLogger("Login");
+                logger.LogInformation("Token XSRF criado para {User} em {Time}", user, DateTimeOffset.UtcNow);
+
+                return Task.CompletedTask;
             }
         };
     });
@@ -88,7 +111,15 @@ builder.Services
 // 3. Autorização + MVC + Swagger
 //
 builder.Services.AddAuthorization();
-builder.Services.AddControllers();
+
+//builder.Services.AddControllers();
+
+builder.Services.AddControllers(options =>
+{
+    // Adiciona o filtro global de CSRF
+    options.Filters.Add<ValidateAntiCsrfFilter>();
+});
+
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
@@ -107,20 +138,6 @@ app.UseHttpsRedirection();
 app.UseCors("app");
 app.UseAuthentication();
 app.UseAuthorization();
-
-// 5. Rotas globais
-//
-
-// Health check / Diagnóstico (sempre disponível)
-//app.MapGet("/api/diagnostics/ping", (IWebHostEnvironment env) =>
-//{
-//    return Results.Ok(new
-//    {
-//        ok = true,
-//        environment = env.EnvironmentName,
-//        at = DateTimeOffset.UtcNow
-//    });
-//});
 
 // Controllers (Auth, Session, etc.)
 app.MapControllers();

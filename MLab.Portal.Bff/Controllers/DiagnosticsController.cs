@@ -14,17 +14,6 @@ public class DiagnosticsController : ControllerBase
         _env = env;
     }
 
-    [HttpGet("debug")]
-    [Authorize]
-    public IActionResult Debug()
-    {
-        if (!_env.IsDevelopment())
-            return Forbid("Endpoint disponível apenas em ambiente de desenvolvimento.");
-
-        var claims = User.Claims.Select(c => new { c.Type, c.Value });
-        return Ok(claims);
-    }
-
     [HttpGet("ping")]
     public IActionResult Ping()
     {
