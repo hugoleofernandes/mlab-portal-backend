@@ -1,13 +1,17 @@
-using System.Security.Claims;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.IdentityModel.Protocols.OpenIdConnect;
 using MLab.Portal.Bff.Security.Csrf;
+using System.Security.Claims;
+using System.Threading.RateLimiting;
+
+
 
 var builder = WebApplication.CreateBuilder(args);
 
 //
-// 1. Configuração de CORS
+// Configuração de CORS
 //
 var allowedOrigins = builder.Configuration
     .GetSection("Cors:AllowedOrigins")
@@ -23,7 +27,7 @@ builder.Services.AddCors(opt =>
 });
 
 //
-// 2. Autenticação & Cookie Seguro
+// Autenticação & Cookie Seguro
 //
 builder.Services
     .AddAuthentication(options =>
@@ -71,14 +75,14 @@ builder.Services
             OnRedirectToIdentityProvider = ctx =>
             {
                 var ui = cfg["UiLocales"] ?? "pt-BR";
-                ctx.ProtocolMessage.SetParameter("ui_locales", ui);
+                ctx.ProtocolMessage.SetParameter("ui_locales", "pt-BR");
                 ctx.ProtocolMessage.Prompt = "login"; // força reautenticação
                 return Task.CompletedTask;
             },
             OnRedirectToIdentityProviderForSignOut = ctx =>
             {
                 var ui = cfg["UiLocales"] ?? "pt-BR";
-                ctx.ProtocolMessage.SetParameter("ui_locales", ui);
+                ctx.ProtocolMessage.SetParameter("ui_locales", "pt-BR");
                 return Task.CompletedTask;
             },
             OnTokenValidated = ctx =>
@@ -96,7 +100,7 @@ builder.Services
                     Path = "/" // disponível para todo o app
                 });
 
-                // Log opcional
+                // Log 
                 var user = ctx.Principal?.Identity?.Name ?? "Desconhecido";
                 var logger = http.RequestServices.GetRequiredService<ILoggerFactory>()
                     .CreateLogger("Login");
@@ -108,7 +112,7 @@ builder.Services
     });
 
 //
-// 3. Autorização + MVC + Swagger
+// Autorização + MVC + Swagger + Insigths
 //
 builder.Services.AddAuthorization();
 
@@ -120,21 +124,94 @@ builder.Services.AddControllers(options =>
     options.Filters.Add<ValidateAntiCsrfFilter>();
 });
 
+//
+// Rate Limiting - impede flood/brute force
+//
+builder.Services.AddRateLimiter(_ => _
+    .AddFixedWindowLimiter("default", options =>
+    {
+        options.PermitLimit = 30;               // 30 requisições
+        options.Window = TimeSpan.FromMinutes(1); // por minuto
+        options.QueueProcessingOrder = QueueProcessingOrder.OldestFirst;
+        options.QueueLimit = 5; // fila curta
+    })
+);
+
+
+
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
+builder.Services.AddApplicationInsightsTelemetry();
+
 var app = builder.Build();
 
+
+
 //
-// 4. Pipeline de execução
+// Pipeline de execução
 //
-//if (app.Environment.IsDevelopment())
+if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
     app.UseSwaggerUI();
 }
 
 app.UseHttpsRedirection();
+
+
+// === Segurança Avançada ===
+
+//Clickjacking	X-Frame-Options: DENY Impede que alguém embede seu site em um <iframe> malicioso.
+//MIME sniffing	X-Content-Type-Options: nosniff Bloqueia execução de scripts com MIME incorreto.
+//Referer leakage	Referrer-Policy: strict - origin - when - cross - origin    Evita enviar URLs completas para outros sites.
+//XSS básico	X-XSS-Protection	Ativa filtro básico em browsers legados.
+//Content Security Policy (CSP)	Content-Security-Policy: ...	Principal barreira contra XSS moderno.
+//Cache-Control	no-store etc.	Impede caching de respostas sensíveis.
+//HSTS	UseHsts()	Força HTTPS sempre (com preload possível).
+//Rate Limiter	AddRateLimiter()	Limita requisições por IP, bloqueia flood/abuso.
+
+
+
+// Segurança de cabeçalhos HTTP
+app.Use((context, next) =>
+{
+    var headers = context.Response.Headers;
+
+    headers["X-Frame-Options"] = "DENY"; // bloqueia embedding em iframes
+    headers["X-Content-Type-Options"] = "nosniff"; // bloqueia MIME sniffing
+    headers["Referrer-Policy"] = "strict-origin-when-cross-origin";
+    headers["X-XSS-Protection"] = "1; mode=block"; // ainda útil em alguns browsers
+
+    // Content Security Policy (CSP)
+    headers["Content-Security-Policy"] =
+        "default-src 'self'; " +
+        "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; " +
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
+        "font-src 'self' https://fonts.gstatic.com; " +
+        "img-src 'self' data: https://*.microsoft.com; " +
+        "frame-ancestors 'none'; " +
+        "object-src 'none'; " +
+        "base-uri 'self';";
+
+    // Cache policy
+    headers["Cache-Control"] = "no-store, no-cache, must-revalidate";
+    headers["Pragma"] = "no-cache";
+    headers["Expires"] = "0";
+
+    return next();
+});
+
+// Força HTTPS + Rate Limiting
+if (!app.Environment.IsDevelopment())
+{
+    app.UseHsts(); // ativa Strict-Transport-Security em prod
+}
+app.UseRateLimiter();
+// ==========================
+
+
+
 app.UseCors("app");
 app.UseAuthentication();
 app.UseAuthorization();
