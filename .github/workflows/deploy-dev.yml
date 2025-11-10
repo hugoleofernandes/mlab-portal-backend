@@ -29,13 +29,11 @@ jobs:
 
       - name: Build Docker image (commit SHA)
         run: |
-          docker build -t ${{ secrets.AZURE_CONTAINER_REGISTRY }}.azurecr.io/portal-bff:${{ github.sha }} \
-            -f MLab.Portal.Bff/Dockerfile MLab.Portal.Bff
+          docker build -t ${{ secrets.AZURE_CONTAINER_REGISTRY }}.azurecr.io/portal-bff:${{ github.sha }} -f MLab.Portal.Bff/Dockerfile MLab.Portal.Bff
 
       - name: Tag image as "dev"
         run: |
-          docker tag ${{ secrets.AZURE_CONTAINER_REGISTRY }}.azurecr.io/portal-bff:${{ github.sha }} \
-                     ${{ secrets.AZURE_CONTAINER_REGISTRY }}.azurecr.io/portal-bff:dev
+          docker tag ${{ secrets.AZURE_CONTAINER_REGISTRY }}.azurecr.io/portal-bff:${{ github.sha }} ${{ secrets.AZURE_CONTAINER_REGISTRY }}.azurecr.io/portal-bff:dev
 
       - name: Push both tags to ACR
         run: |
@@ -51,4 +49,4 @@ jobs:
             --output table
 
       - name: Show image tags published
-        run: echo "✅ Image pushed: ${{ secrets.AZURE_CONTAINER_REGISTRY }}.azurecr.io/portal-bff:${{ github.sha }} and :dev"
+        run: echo "Image pushed: ${{ secrets.AZURE_CONTAINER_REGISTRY }}.azurecr.io/portal-bff:${{ github.sha }} and :dev"
