@@ -8,6 +8,7 @@ on:
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
+    environment: dev
 
     steps:
       - name: Checkout code
@@ -21,12 +22,18 @@ jobs:
       - name: Log in to Azure Container Registry
         run: az acr login --name ${{ secrets.AZURE_CONTAINER_REGISTRY }}
 
-      - name: Build Docker image
+      - name: Build Docker image (commit SHA)
         run: |
-          docker build -t ${{ secrets.AZURE_CONTAINER_REGISTRY }}/portal-bff:dev -f MLab.Portal.Bff/Dockerfile ./MLab.Portal.Bff
+          docker build -t ${{ secrets.AZURE_CONTAINER_REGISTRY }}/portal-bff:${{ github.sha }} -f MLab.Portal.Bff/Dockerfile .
 
-      - name: Push image to ACR
+      - name: Tag image as "dev"
         run: |
+          docker tag ${{ secrets.AZURE_CONTAINER_REGISTRY }}/portal-bff:${{ github.sha }} \
+                      ${{ secrets.AZURE_CONTAINER_REGISTRY }}/portal-bff:dev
+
+      - name: Push both tags to ACR
+        run: |
+          docker push ${{ secrets.AZURE_CONTAINER_REGISTRY }}/portal-bff:${{ github.sha }}
           docker push ${{ secrets.AZURE_CONTAINER_REGISTRY }}/portal-bff:dev
 
       - name: Deploy to Azure Container App
@@ -34,5 +41,5 @@ jobs:
           az containerapp update \
             --name ${{ secrets.AZURE_CONTAINER_APP }} \
             --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }} \
-            --image ${{ secrets.AZURE_CONTAINER_REGISTRY }}/portal-bff:dev \
+            --image ${{ secrets.AZURE_CONTAINER_REGISTRY }}/portal-bff:${{ github.sha }} \
             --output table
