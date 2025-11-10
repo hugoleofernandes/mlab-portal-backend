@@ -47,6 +47,3 @@ jobs:
             --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }} \
             --image ${{ secrets.AZURE_CONTAINER_REGISTRY }}.azurecr.io/portal-bff:${{ github.sha }} \
             --output table
-
-      - name: Show image tags published
-        run: echo "Image pushed: ${{ secrets.AZURE_CONTAINER_REGISTRY }}.azurecr.io/portal-bff:${{ github.sha }} and :dev"
