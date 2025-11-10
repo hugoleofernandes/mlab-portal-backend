@@ -17,6 +17,6 @@ public class DiagnosticsController : ControllerBase
     [HttpGet("ping")]
     public IActionResult Ping()
     {
-        return Ok(new { ok = true, environment = _env.EnvironmentName, at = DateTime.UtcNow });
+        return Ok(new { ok = true, environment = _env.EnvironmentName, at = DateTime.UtcNow, v = "1" });
     }
 }
