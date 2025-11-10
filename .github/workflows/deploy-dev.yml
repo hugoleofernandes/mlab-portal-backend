@@ -29,28 +29,30 @@ jobs:
 
       - name: Build Docker image (commit SHA)
         run: |
-          docker build -t ${{ secrets.AZURE_CONTAINER_REGISTRY }}.azurecr.io/portal-bff:${{ github.sha }} -f MLab.Portal.Bff/Dockerfile MLab.Portal.Bff
+          docker build -t ${{ secrets.AZURE_CONTAINER_REGISTRY }}.azurecr.io/mlab-portal-bff:${{ github.sha }} \
+            -f MLab.Portal.Bff/Dockerfile MLab.Portal.Bff
 
       - name: Tag image as "dev"
         run: |
-          docker tag ${{ secrets.AZURE_CONTAINER_REGISTRY }}.azurecr.io/portal-bff:${{ github.sha }} ${{ secrets.AZURE_CONTAINER_REGISTRY }}.azurecr.io/portal-bff:dev
+          docker tag ${{ secrets.AZURE_CONTAINER_REGISTRY }}.azurecr.io/mlab-portal-bff:${{ github.sha }} \
+                     ${{ secrets.AZURE_CONTAINER_REGISTRY }}.azurecr.io/mlab-portal-bff:dev
 
       - name: Push both tags to ACR
         run: |
-          docker push ${{ secrets.AZURE_CONTAINER_REGISTRY }}.azurecr.io/portal-bff:${{ github.sha }}
-          docker push ${{ secrets.AZURE_CONTAINER_REGISTRY }}.azurecr.io/portal-bff:dev
+          docker push ${{ secrets.AZURE_CONTAINER_REGISTRY }}.azurecr.io/mlab-portal-bff:${{ github.sha }}
+          docker push ${{ secrets.AZURE_CONTAINER_REGISTRY }}.azurecr.io/mlab-portal-bff:dev
 
       - name: Deploy to Azure Container App
         run: |
           az containerapp update \
             --name ${{ secrets.AZURE_CONTAINER_APP }} \
             --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }} \
-            --image ${{ secrets.AZURE_CONTAINER_REGISTRY }}.azurecr.io/portal-bff:${{ github.sha }} \
+            --image ${{ secrets.AZURE_CONTAINER_REGISTRY }}.azurecr.io/mlab-portal-bff:${{ github.sha }} \
             --output table
 
       - name: Show image tags published
         run: |
           echo "✅ Image pushed:"
-          echo "${{ secrets.AZURE_CONTAINER_REGISTRY }}.azurecr.io/portal-bff:${{ github.sha }}"
+          echo "${{ secrets.AZURE_CONTAINER_REGISTRY }}.azurecr.io/mlab-portal-bff:${{ github.sha }}"
           echo "and :dev"
           
