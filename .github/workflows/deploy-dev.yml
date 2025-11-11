@@ -5,9 +5,9 @@ on:
     branches:
       - dev
       
-  permissions:
-    id-token: write
-    contents: read
+permissions:
+  id-token: write
+  contents: read
 
 jobs:
   build-and-deploy:
