@@ -30,7 +30,7 @@ jobs:
       - name: Build Docker image (commit SHA)
         run: |
           docker build -t ${{ secrets.AZURE_CONTAINER_REGISTRY }}.azurecr.io/mlab-portal-bff:${{ github.sha }} \
-            -f MLab.Portal.Bff/Dockerfile MLab.Portal.Bff
+          -f MLab.Portal.Bff/Dockerfile .
 
       - name: Tag image as "dev"
         run: |
