@@ -17,6 +17,31 @@ public class DiagnosticsController : ControllerBase
     [HttpGet("ping")]
     public IActionResult Ping()
     {
-        return Ok(new { ok = true, environment = _env.EnvironmentName, at = DateTime.UtcNow, v = "1" });
+        return Ok(new { ok = true, environment = _env.EnvironmentName, at = DateTime.UtcNow, v = "2" });
+    }
+
+    [HttpGet("env")]
+    public IActionResult GetEnvironmentVariables()
+    {
+        if (!_env.IsDevelopment())
+            return Unauthorized(new { error = "Not available in non-DEV environments." });
+
+        // Captura todas as variáveis de ambiente disponíveis
+        var envVars = Environment.GetEnvironmentVariables()
+            .Cast<System.Collections.DictionaryEntry>()
+            .ToDictionary(entry => (string)entry.Key!, entry => (string?)entry.Value);
+
+        // Filtra apenas as relevantes da aplicação
+        var filtered = envVars
+            //.Where(kv => kv.Key.StartsWith("Authentication__") || kv.Key.StartsWith("Cors__"))
+            .OrderBy(kv => kv.Key)
+            .ToDictionary(kv => kv.Key, kv => kv.Value);
+
+        return Ok(new
+        {
+            environment = _env.EnvironmentName,
+            hostname = Environment.MachineName,
+            variables = filtered
+        });
     }
 }

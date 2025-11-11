@@ -146,6 +146,8 @@ builder.Services.AddApplicationInsightsTelemetry();
 
 var app = builder.Build();
 
+Console.WriteLine($"ASP.NET iniciado em ambiente: {builder.Environment.EnvironmentName}");
+Console.WriteLine($"URLs: {builder.Configuration["ASPNETCORE_URLS"] ?? "default"}");
 
 
 //
