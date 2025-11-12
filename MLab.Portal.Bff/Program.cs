@@ -2,11 +2,14 @@ using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.IdentityModel.Protocols.OpenIdConnect;
+using Microsoft.IdentityModel.Logging;
 using MLab.Portal.Bff.Security.Csrf;
 using System.Security.Claims;
 using System.Threading.RateLimiting;
+using System.Diagnostics;
 
 
+IdentityModelEventSource.ShowPII = (Debugger.IsAttached) ? true : false; // false qdo PROD para nunca exibir dados sensíveis em logs
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -75,14 +78,17 @@ builder.Services
             OnRedirectToIdentityProvider = ctx =>
             {
                 var ui = cfg["UiLocales"] ?? "pt-BR";
-                ctx.ProtocolMessage.SetParameter("ui_locales", "pt-BR");
+                ctx.ProtocolMessage.SetParameter("ui_locales", ui);
+                ctx.ProtocolMessage.SetParameter("mkt", ui);
                 ctx.ProtocolMessage.Prompt = "login"; // força reautenticação
                 return Task.CompletedTask;
             },
             OnRedirectToIdentityProviderForSignOut = ctx =>
             {
                 var ui = cfg["UiLocales"] ?? "pt-BR";
-                ctx.ProtocolMessage.SetParameter("ui_locales", "pt-BR");
+                ctx.ProtocolMessage.SetParameter("ui_locales", ui);
+                ctx.ProtocolMessage.SetParameter("mkt", ui);
+
                 return Task.CompletedTask;
             },
             OnTokenValidated = ctx =>
