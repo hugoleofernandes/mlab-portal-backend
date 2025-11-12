@@ -1,4 +1,4 @@
-using Microsoft.AspNetCore.Authentication.Cookies;
+ï»¿using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.IdentityModel.Protocols.OpenIdConnect;
@@ -8,13 +8,13 @@ using System.Security.Claims;
 using System.Threading.RateLimiting;
 using System.Diagnostics;
 
-
-IdentityModelEventSource.ShowPII = (Debugger.IsAttached) ? true : false; // false qdo PROD para nunca exibir dados sensíveis em logs
+// Exibe detalhes PII apenas no modo Debug
+IdentityModelEventSource.ShowPII = Debugger.IsAttached;
 
 var builder = WebApplication.CreateBuilder(args);
 
 //
-// Configuração de CORS
+// ConfiguraÃ§Ã£o de CORS
 //
 var allowedOrigins = builder.Configuration
     .GetSection("Cors:AllowedOrigins")
@@ -30,7 +30,7 @@ builder.Services.AddCors(opt =>
 });
 
 //
-// Autenticação & Cookie Seguro
+// AutenticaÃ§Ã£o e Cookie Seguro
 //
 builder.Services
     .AddAuthentication(options =>
@@ -43,73 +43,115 @@ builder.Services
         options.Cookie.Name = ".mlab.portal.session";
         options.Cookie.HttpOnly = true;
         options.Cookie.SecurePolicy = CookieSecurePolicy.Always;
-        options.Cookie.SameSite = SameSiteMode.None; // necessário para CORS com front separado
+        options.Cookie.SameSite = SameSiteMode.None;
         options.SlidingExpiration = true;
         options.ExpireTimeSpan = TimeSpan.FromHours(8);
     })
     .AddOpenIdConnect(options =>
     {
+        // Valores padrÃµes apenas para inicializaÃ§Ã£o (serÃ£o substituÃ­dos)
         var cfg = builder.Configuration.GetSection("Authentication");
 
-        options.Authority = cfg["Authority"]; // Ex: https://tenant.ciamlogin.com/{domain}/v2.0
-        options.ClientId = cfg["ClientId"];
-        options.ClientSecret = cfg["ClientSecret"];
-        options.ResponseType = OpenIdConnectResponseType.Code; // PKCE
+        options.Authority = cfg["Authority"] ?? "https://placeholder.ciamlogin.com/placeholder.onmicrosoft.com/v2.0";
+        options.ClientId = cfg["ClientId"] ?? "00000000-0000-0000-0000-000000000000";
+        options.ClientSecret = cfg["ClientSecret"] ?? "dummy-secret";
+        options.ResponseType = OpenIdConnectResponseType.Code;
         options.UsePkce = true;
 
-        options.CallbackPath = cfg["CallbackPath"];                 // /signin-oidc
-        options.SignedOutCallbackPath = cfg["SignedOutCallbackPath"]; // /signout-callback-oidc
-
+        options.CallbackPath = cfg["CallbackPath"];
+        options.SignedOutCallbackPath = cfg["SignedOutCallbackPath"];
         options.GetClaimsFromUserInfoEndpoint = true;
-        options.SaveTokens = false; // tokens não são persistidos no cookie
+        options.SaveTokens = false;
 
-        // Escopos padrão
+        // Escopos padrÃ£o
         options.Scope.Clear();
         foreach (var s in (cfg["Scopes"] ?? "openid profile email").Split(' ', StringSplitOptions.RemoveEmptyEntries))
             options.Scope.Add(s);
 
-        // Validação
+        // Claims padrÃ£o
         options.TokenValidationParameters.NameClaimType = "name";
         options.TokenValidationParameters.RoleClaimType = ClaimTypes.Role;
 
-        // Eventos personalizados (idioma e logout)
+        var ui = cfg["UiLocales"];
+
+        //
+        // === Eventos personalizados ===
+        //
         options.Events = new OpenIdConnectEvents
         {
             OnRedirectToIdentityProvider = ctx =>
             {
-                var ui = cfg["UiLocales"] ?? "pt-BR";
-                ctx.ProtocolMessage.SetParameter("ui_locales", ui);
-                ctx.ProtocolMessage.SetParameter("mkt", ui);
-                ctx.ProtocolMessage.Prompt = "login"; // força reautenticação
-                return Task.CompletedTask;
-            },
-            OnRedirectToIdentityProviderForSignOut = ctx =>
-            {
-                var ui = cfg["UiLocales"] ?? "pt-BR";
+                var http = ctx.HttpContext;
+
+                // LÃª lab da querystring
+                var lab = http.Request.Query["lab"].ToString()?.ToLowerInvariant();
+                if (string.IsNullOrWhiteSpace(lab))
+                {
+                    http.Response.StatusCode = 400;
+                    return http.Response.WriteAsync("Erro: parÃ¢metro 'lab' Ã© obrigatÃ³rio (ex: /auth/login?lab=lab1)");
+                }
+
+                var labConfig = builder.Configuration.GetSection($"AuthenticationLabs:{lab}");
+                var authority = labConfig["Authority"];
+                var clientId = labConfig["ClientId"];
+                var clientSecret = labConfig["ClientSecret"];
+
+                if (string.IsNullOrEmpty(authority) || string.IsNullOrEmpty(clientId))
+                {
+                    http.Response.StatusCode = 400;
+                    return http.Response.WriteAsync($"Erro: laboratÃ³rio '{lab}' nÃ£o possui configuraÃ§Ã£o vÃ¡lida.");
+                }
+
+                // Ajuste do Authority (sem duplicar /v2.0)
+                var issuer = authority.Replace("/v2.0", "/oauth2/v2.0/authorize");
+
+                ctx.ProtocolMessage.IssuerAddress = issuer;
+                ctx.ProtocolMessage.ClientId = clientId;
+                ctx.ProtocolMessage.SetParameter("client_secret", clientSecret);
+
+                // Idioma e experiÃªncia de login
                 ctx.ProtocolMessage.SetParameter("ui_locales", ui);
                 ctx.ProtocolMessage.SetParameter("mkt", ui);
 
+                // ForÃ§a reautenticaÃ§Ã£o e ignora prompt "Continuar conectado?"
+                // sempre exibir tela de login
+                ctx.ProtocolMessage.Prompt = "login";
+                // ignora sessÃ£o anterior
+                ctx.ProtocolMessage.SetParameter("domain_hint", "none");
+                // nÃ£o sugere usuÃ¡rio anterior
+                ctx.ProtocolMessage.SetParameter("login_hint", "");
+                // forÃ§a revalidaÃ§Ã£o imediata
+                ctx.ProtocolMessage.SetParameter("max_age", "0");
+                // impede â€œContinuar conectado?â€
+                ctx.ProtocolMessage.SetParameter("remember", "false");   
+
+
+                Console.WriteLine($"ðŸ”¹ Tenant ativo: {lab} ({authority})");
                 return Task.CompletedTask;
             },
+
+            OnRedirectToIdentityProviderForSignOut = ctx =>
+            {
+                ctx.ProtocolMessage.SetParameter("ui_locales", ui);
+                ctx.ProtocolMessage.SetParameter("mkt", ui);
+                return Task.CompletedTask;
+            },
+
             OnTokenValidated = ctx =>
             {
                 var http = ctx.HttpContext;
-
-                // Gera token XSRF assim que login é validado
                 var xsrfToken = Guid.NewGuid().ToString("N");
 
                 http.Response.Cookies.Append("XSRF-TOKEN", xsrfToken, new CookieOptions
                 {
-                    HttpOnly = false, // JS pode ler
-                    Secure = true, // Apenas HTTPS
+                    HttpOnly = false,
+                    Secure = true,
                     SameSite = SameSiteMode.None,
-                    Path = "/" // disponível para todo o app
+                    Path = "/"
                 });
 
-                // Log 
                 var user = ctx.Principal?.Identity?.Name ?? "Desconhecido";
-                var logger = http.RequestServices.GetRequiredService<ILoggerFactory>()
-                    .CreateLogger("Login");
+                var logger = http.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("Login");
                 logger.LogInformation("Token XSRF criado para {User} em {Time}", user, DateTimeOffset.UtcNow);
 
                 return Task.CompletedTask;
@@ -118,36 +160,27 @@ builder.Services
     });
 
 //
-// Autorização + MVC + Swagger + Insigths
+// AutorizaÃ§Ã£o + MVC + Swagger + Application Insights
 //
 builder.Services.AddAuthorization();
 
-//builder.Services.AddControllers();
-
 builder.Services.AddControllers(options =>
 {
-    // Adiciona o filtro global de CSRF
     options.Filters.Add<ValidateAntiCsrfFilter>();
 });
 
-//
-// Rate Limiting - impede flood/brute force
-//
 builder.Services.AddRateLimiter(_ => _
     .AddFixedWindowLimiter("default", options =>
     {
-        options.PermitLimit = 30;               // 30 requisições
-        options.Window = TimeSpan.FromMinutes(1); // por minuto
+        options.PermitLimit = 30;
+        options.Window = TimeSpan.FromMinutes(1);
         options.QueueProcessingOrder = QueueProcessingOrder.OldestFirst;
-        options.QueueLimit = 5; // fila curta
+        options.QueueLimit = 5;
     })
 );
 
-
-
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
-
 builder.Services.AddApplicationInsightsTelemetry();
 
 var app = builder.Build();
@@ -155,9 +188,8 @@ var app = builder.Build();
 Console.WriteLine($"ASP.NET iniciado em ambiente: {builder.Environment.EnvironmentName}");
 Console.WriteLine($"URLs: {builder.Configuration["ASPNETCORE_URLS"] ?? "default"}");
 
-
 //
-// Pipeline de execução
+// Pipeline de execuÃ§Ã£o
 //
 if (app.Environment.IsDevelopment())
 {
@@ -167,31 +199,21 @@ if (app.Environment.IsDevelopment())
 
 app.UseHttpsRedirection();
 
-
-// === Segurança Avançada ===
-
-//Clickjacking	X-Frame-Options: DENY Impede que alguém embede seu site em um <iframe> malicioso.
-//MIME sniffing	X-Content-Type-Options: nosniff Bloqueia execução de scripts com MIME incorreto.
-//Referer leakage	Referrer-Policy: strict - origin - when - cross - origin    Evita enviar URLs completas para outros sites.
-//XSS básico	X-XSS-Protection	Ativa filtro básico em browsers legados.
-//Content Security Policy (CSP)	Content-Security-Policy: ...	Principal barreira contra XSS moderno.
-//Cache-Control	no-store etc.	Impede caching de respostas sensíveis.
-//HSTS	UseHsts()	Força HTTPS sempre (com preload possível).
-//Rate Limiter	AddRateLimiter()	Limita requisições por IP, bloqueia flood/abuso.
-
-
-
-// Segurança de cabeçalhos HTTP
+//
+// SeguranÃ§a de cabeÃ§alhos HTTP
+//
 app.Use((context, next) =>
 {
     var headers = context.Response.Headers;
 
-    headers["X-Frame-Options"] = "DENY"; // bloqueia embedding em iframes
-    headers["X-Content-Type-Options"] = "nosniff"; // bloqueia MIME sniffing
+    headers["X-Frame-Options"] = "DENY";
+    headers["X-Content-Type-Options"] = "nosniff";
     headers["Referrer-Policy"] = "strict-origin-when-cross-origin";
-    headers["X-XSS-Protection"] = "1; mode=block"; // ainda útil em alguns browsers
+    headers["X-XSS-Protection"] = "1; mode=block";
+    headers["Cache-Control"] = "no-store, no-cache, must-revalidate";
+    headers["Pragma"] = "no-cache";
+    headers["Expires"] = "0";
 
-    // Content Security Policy (CSP)
     headers["Content-Security-Policy"] =
         "default-src 'self'; " +
         "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; " +
@@ -202,29 +224,15 @@ app.Use((context, next) =>
         "object-src 'none'; " +
         "base-uri 'self';";
 
-    // Cache policy
-    headers["Cache-Control"] = "no-store, no-cache, must-revalidate";
-    headers["Pragma"] = "no-cache";
-    headers["Expires"] = "0";
-
     return next();
 });
 
-// Força HTTPS + Rate Limiting
 if (!app.Environment.IsDevelopment())
-{
-    app.UseHsts(); // ativa Strict-Transport-Security em prod
-}
+    app.UseHsts();
+
 app.UseRateLimiter();
-// ==========================
-
-
-
 app.UseCors("app");
 app.UseAuthentication();
 app.UseAuthorization();
-
-// Controllers (Auth, Session, etc.)
 app.MapControllers();
-
 app.Run();
