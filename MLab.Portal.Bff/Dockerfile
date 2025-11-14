@@ -3,7 +3,6 @@ FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
 WORKDIR /src
 
 # Copia o csproj e restaura dependências
-#COPY ["MLab.Portal.Bff/MLab.Portal.Bff.csproj", "MLab.Portal.Bff/"]
 COPY MLab.Portal.Bff/MLab.Portal.Bff.csproj MLab.Portal.Bff/
 RUN dotnet restore "MLab.Portal.Bff/MLab.Portal.Bff.csproj"
 

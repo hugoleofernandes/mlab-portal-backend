@@ -1,20 +1,20 @@
 ﻿using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.RateLimiting;
-using Microsoft.IdentityModel.Protocols.OpenIdConnect;
 using Microsoft.IdentityModel.Logging;
+using Microsoft.IdentityModel.Protocols.OpenIdConnect;
 using MLab.Portal.Bff.Security.Csrf;
+using System.Diagnostics;
 using System.Security.Claims;
 using System.Threading.RateLimiting;
-using System.Diagnostics;
 
-// Exibe detalhes PII apenas no modo Debug
 IdentityModelEventSource.ShowPII = Debugger.IsAttached;
 
 var builder = WebApplication.CreateBuilder(args);
 
 //
-// Configuração de CORS
+// CORS
 //
 var allowedOrigins = builder.Configuration
     .GetSection("Cors:AllowedOrigins")
@@ -30,7 +30,7 @@ builder.Services.AddCors(opt =>
 });
 
 //
-// Autenticação e Cookie Seguro
+// Autenticação + Cookie seguro
 //
 builder.Services
     .AddAuthentication(options =>
@@ -49,12 +49,16 @@ builder.Services
     })
     .AddOpenIdConnect(options =>
     {
-        // Valores padrões apenas para inicialização (serão substituídos)
+        //
+        // VALORES DEFAULT APENAS PARA INICIALIZAÇÃO –
+        // Eles serão SOBRESCRITOS conforme o lab selecionado
+        //
         var cfg = builder.Configuration.GetSection("Authentication");
 
-        options.Authority = cfg["Authority"] ?? "https://placeholder.ciamlogin.com/placeholder.onmicrosoft.com/v2.0";
-        options.ClientId = cfg["ClientId"] ?? "00000000-0000-0000-0000-000000000000";
-        options.ClientSecret = cfg["ClientSecret"] ?? "dummy-secret";
+        options.Authority = cfg["Authority"];
+        options.ClientId = cfg["ClientId"];
+        options.ClientSecret = cfg["ClientSecret"];
+
         options.ResponseType = OpenIdConnectResponseType.Code;
         options.UsePkce = true;
 
@@ -63,27 +67,31 @@ builder.Services
         options.GetClaimsFromUserInfoEndpoint = true;
         options.SaveTokens = false;
 
-        // Escopos padrão
+        // Scopes
         options.Scope.Clear();
-        foreach (var s in (cfg["Scopes"] ?? "openid profile email").Split(' ', StringSplitOptions.RemoveEmptyEntries))
-            options.Scope.Add(s);
+        foreach (var s in (cfg["Scopes"] ?? "openid profile email").Split(' '))
+            if (!string.IsNullOrWhiteSpace(s))
+                options.Scope.Add(s.Trim());
 
-        // Claims padrão
+        // Claims
         options.TokenValidationParameters.NameClaimType = "name";
         options.TokenValidationParameters.RoleClaimType = ClaimTypes.Role;
 
         var ui = cfg["UiLocales"];
 
         //
-        // === Eventos personalizados ===
+        // EVENTOS PERSONALIZADOS
         //
         options.Events = new OpenIdConnectEvents
         {
+            //
+            // 1) LOGIN (REDIRECT PARA O CIAM)
+            //
             OnRedirectToIdentityProvider = ctx =>
             {
                 var http = ctx.HttpContext;
 
-                // Lê lab da querystring
+                // Lab via querystring
                 var lab = http.Request.Query["lab"].ToString()?.ToLowerInvariant();
                 if (string.IsNullOrWhiteSpace(lab))
                 {
@@ -91,6 +99,16 @@ builder.Services
                     return http.Response.WriteAsync("Erro: parâmetro 'lab' é obrigatório (ex: /auth/login?lab=lab1)");
                 }
 
+                // Guarda o lab em cookie — necessário para o callback
+                http.Response.Cookies.Append("mlab_lab", lab, new CookieOptions
+                {
+                    HttpOnly = true,
+                    Secure = true,
+                    SameSite = SameSiteMode.None,
+                    Path = "/"
+                });
+
+                // Lê config do lab
                 var labConfig = builder.Configuration.GetSection($"AuthenticationLabs:{lab}");
                 var authority = labConfig["Authority"];
                 var clientId = labConfig["ClientId"];
@@ -102,34 +120,72 @@ builder.Services
                     return http.Response.WriteAsync($"Erro: laboratório '{lab}' não possui configuração válida.");
                 }
 
-                // Ajuste do Authority (sem duplicar /v2.0)
+                // Ajuste do endpoint de autorização
                 var issuer = authority.Replace("/v2.0", "/oauth2/v2.0/authorize");
 
+                // Override dos valores reais
                 ctx.ProtocolMessage.IssuerAddress = issuer;
                 ctx.ProtocolMessage.ClientId = clientId;
                 ctx.ProtocolMessage.SetParameter("client_secret", clientSecret);
 
-                // Idioma e experiência de login
+                //
+                // Forçar login SEM KMSI + tela limpa
+                //
+                //ctx.ProtocolMessage.Prompt = "login consent";
+                //AADSTS90023: Unsupported 'prompt' value.
+                ctx.ProtocolMessage.Prompt = "login";
+
+                ctx.ProtocolMessage.SetParameter("login_hint", "");
+                ctx.ProtocolMessage.SetParameter("domain_hint", "none");
+                ctx.ProtocolMessage.SetParameter("max_age", "0");
+                ctx.ProtocolMessage.SetParameter("remember", "false");
+                ctx.ProtocolMessage.SetParameter("suppress_prompt", "true");
+                ctx.ProtocolMessage.SetParameter("auth_method", "refresh_session");
+                ctx.ProtocolMessage.SetParameter("disable_kmsi", "true");
+                ctx.ProtocolMessage.SetParameter("disable_kmsi", "1");
+
                 ctx.ProtocolMessage.SetParameter("ui_locales", ui);
                 ctx.ProtocolMessage.SetParameter("mkt", ui);
 
-                // Força reautenticação e ignora prompt "Continuar conectado?"
-                // sempre exibir tela de login
-                ctx.ProtocolMessage.Prompt = "login";
-                // ignora sessão anterior
-                ctx.ProtocolMessage.SetParameter("domain_hint", "none");
-                // não sugere usuário anterior
-                ctx.ProtocolMessage.SetParameter("login_hint", "");
-                // força revalidação imediata
-                ctx.ProtocolMessage.SetParameter("max_age", "0");
-                // impede “Continuar conectado?”
-                ctx.ProtocolMessage.SetParameter("remember", "false");   
+                // Evita KMSI em form_post
+                ctx.ProtocolMessage.ResponseMode = "query";
 
+                Console.WriteLine($"🔹 Login iniciado para LAB: {lab}");
 
-                Console.WriteLine($"🔹 Tenant ativo: {lab} ({authority})");
                 return Task.CompletedTask;
             },
 
+            //
+            // 2) CALLBACK (TROCA DO AUTH CODE POR TOKEN)
+            //
+            OnAuthorizationCodeReceived = ctx =>
+            {
+                var http = ctx.HttpContext;
+
+                // Recupera o lab salvo no cookie
+                var lab = http.Request.Cookies["mlab_lab"]?.ToLowerInvariant();
+
+                if (string.IsNullOrWhiteSpace(lab))
+                {
+                    throw new Exception("Não foi possível determinar o lab no callback.");
+                }
+
+                var labConfig = builder.Configuration.GetSection($"AuthenticationLabs:{lab}");
+                var clientId = labConfig["ClientId"];
+                var clientSecret = labConfig["ClientSecret"];
+
+                // Override REAL usado no token endpoint
+                ctx.TokenEndpointRequest.ClientId = clientId;
+                ctx.TokenEndpointRequest.ClientSecret = clientSecret;
+
+                Console.WriteLine($"🔹 Callback autorizado pelo LAB: {lab}");
+
+                return Task.CompletedTask;
+            },
+
+            //
+            // 3) LOGOUT
+            //
             OnRedirectToIdentityProviderForSignOut = ctx =>
             {
                 ctx.ProtocolMessage.SetParameter("ui_locales", ui);
@@ -137,6 +193,9 @@ builder.Services
                 return Task.CompletedTask;
             },
 
+            //
+            // 4) TOKEN VALIDADO
+            //
             OnTokenValidated = ctx =>
             {
                 var http = ctx.HttpContext;
@@ -150,47 +209,41 @@ builder.Services
                     Path = "/"
                 });
 
-                var user = ctx.Principal?.Identity?.Name ?? "Desconhecido";
-                var logger = http.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("Login");
-                logger.LogInformation("Token XSRF criado para {User} em {Time}", user, DateTimeOffset.UtcNow);
-
                 return Task.CompletedTask;
             }
         };
     });
 
 //
-// Autorização + MVC + Swagger + Application Insights
+// MVC + Swagger + AI
 //
 builder.Services.AddAuthorization();
-
-builder.Services.AddControllers(options =>
+builder.Services.AddControllers(o => o.Filters.Add<ValidateAntiCsrfFilter>());
+builder.Services.AddRateLimiter(_ => _.AddFixedWindowLimiter("default", o =>
 {
-    options.Filters.Add<ValidateAntiCsrfFilter>();
-});
-
-builder.Services.AddRateLimiter(_ => _
-    .AddFixedWindowLimiter("default", options =>
-    {
-        options.PermitLimit = 30;
-        options.Window = TimeSpan.FromMinutes(1);
-        options.QueueProcessingOrder = QueueProcessingOrder.OldestFirst;
-        options.QueueLimit = 5;
-    })
-);
-
+    o.PermitLimit = 30;
+    o.Window = TimeSpan.FromMinutes(1);
+    o.QueueProcessingOrder = QueueProcessingOrder.OldestFirst;
+    o.QueueLimit = 5;
+}));
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 builder.Services.AddApplicationInsightsTelemetry();
 
 var app = builder.Build();
 
-Console.WriteLine($"ASP.NET iniciado em ambiente: {builder.Environment.EnvironmentName}");
-Console.WriteLine($"URLs: {builder.Configuration["ASPNETCORE_URLS"] ?? "default"}");
+//
+// Forward headers — essencial para ngrok/containers
+//
+app.UseForwardedHeaders(new ForwardedHeadersOptions
+{
+    ForwardedHeaders = ForwardedHeaders.XForwardedProto | ForwardedHeaders.XForwardedFor,
+    RequireHeaderSymmetry = false,
+    ForwardLimit = null,
+    KnownNetworks = { },
+    KnownProxies = { }
+});
 
-//
-// Pipeline de execução
-//
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
@@ -200,29 +253,17 @@ if (app.Environment.IsDevelopment())
 app.UseHttpsRedirection();
 
 //
-// Segurança de cabeçalhos HTTP
+// Segurança
 //
 app.Use((context, next) =>
 {
-    var headers = context.Response.Headers;
-
-    headers["X-Frame-Options"] = "DENY";
-    headers["X-Content-Type-Options"] = "nosniff";
-    headers["Referrer-Policy"] = "strict-origin-when-cross-origin";
-    headers["X-XSS-Protection"] = "1; mode=block";
-    headers["Cache-Control"] = "no-store, no-cache, must-revalidate";
-    headers["Pragma"] = "no-cache";
-    headers["Expires"] = "0";
-
-    headers["Content-Security-Policy"] =
-        "default-src 'self'; " +
-        "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; " +
-        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
-        "font-src 'self' https://fonts.gstatic.com; " +
-        "img-src 'self' data: https://*.microsoft.com; " +
-        "frame-ancestors 'none'; " +
-        "object-src 'none'; " +
-        "base-uri 'self';";
+    var h = context.Response.Headers;
+    h["X-Frame-Options"] = "DENY";
+    h["X-Content-Type-Options"] = "nosniff";
+    h["Referrer-Policy"] = "strict-origin-when-cross-origin";
+    h["Cache-Control"] = "no-store, no-cache, must-revalidate";
+    h["Pragma"] = "no-cache";
+    h["Expires"] = "0";
 
     return next();
 });
@@ -235,4 +276,5 @@ app.UseCors("app");
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
+
 app.Run();
