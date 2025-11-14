@@ -49,18 +49,22 @@ builder.Services
     })
     .AddOpenIdConnect(options =>
     {
-        //
-        // VALORES DEFAULT APENAS PARA INICIALIZAÇÃO –
-        // Eles serão SOBRESCRITOS conforme o lab selecionado
-        //
-        var cfg = builder.Configuration.GetSection("Authentication");
+        // Lab(tenant) selecionado via querystring
+        var ctx = builder.Services.BuildServiceProvider()
+            .GetRequiredService<Microsoft.AspNetCore.Http.IHttpContextAccessor>();
+        var lab = ctx.HttpContext.Request.Query["lab"].ToString()?.ToLowerInvariant();
+        
+        var labConfig = builder.Configuration.GetSection($"AuthenticationLabs:{lab}");
 
-        options.Authority = cfg["Authority"];
-        options.ClientId = cfg["ClientId"];
-        options.ClientSecret = cfg["ClientSecret"];
+        options.Authority = labConfig["Authority"];
+        options.ClientId = labConfig["ClientId"];
+        options.ClientSecret = labConfig["ClientSecret"];
+
 
         options.ResponseType = OpenIdConnectResponseType.Code;
         options.UsePkce = true;
+
+        var cfg = builder.Configuration.GetSection("Authentication");
 
         options.CallbackPath = cfg["CallbackPath"];
         options.SignedOutCallbackPath = cfg["SignedOutCallbackPath"];
@@ -124,6 +128,7 @@ builder.Services
                 var issuer = authority.Replace("/v2.0", "/oauth2/v2.0/authorize");
 
                 // Override dos valores reais
+                ctx.ProtocolMessage.AuthorizationEndpoint = authority;
                 ctx.ProtocolMessage.IssuerAddress = issuer;
                 ctx.ProtocolMessage.ClientId = clientId;
                 ctx.ProtocolMessage.SetParameter("client_secret", clientSecret);
