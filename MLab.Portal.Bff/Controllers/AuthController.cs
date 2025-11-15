@@ -18,12 +18,19 @@ public class AuthController : ControllerBase
     }
 
     [HttpGet("login")]
-    public async Task<IActionResult> Login()
+    public async Task<IActionResult> Login(string lab)
     {
-        var props = new AuthenticationProperties { RedirectUri = "/" };
-        await HttpContext.ChallengeAsync(OpenIdConnectDefaults.AuthenticationScheme, props);
+        if (lab != "lab1" && lab != "lab2")
+            return BadRequest("lab inválido");
         
-        return new EmptyResult();
+        return Challenge(new AuthenticationProperties { RedirectUri = "/" }, lab); // <- aqui é exatamente o nome do scheme
+
+
+        //var props = new AuthenticationProperties { RedirectUri = "/" };
+        //await HttpContext.ChallengeAsync(OpenIdConnectDefaults.AuthenticationScheme, props);
+
+
+        //return new EmptyResult();
     }
 
     [HttpPost("logout")]
@@ -33,9 +40,15 @@ public class AuthController : ControllerBase
         var user = HttpContext.User.Identity?.Name ?? "Desconhecido";
         _logger.LogInformation("Logout iniciado por {User} às {Time}", user, DateTimeOffset.UtcNow);
 
-        await HttpContext.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
-        await HttpContext.SignOutAsync(OpenIdConnectDefaults.AuthenticationScheme,
-            new AuthenticationProperties { RedirectUri = "https://localhost:5173/" });
+        //await HttpContext.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
+        //await HttpContext.SignOutAsync(OpenIdConnectDefaults.AuthenticationScheme,
+        //    new AuthenticationProperties { RedirectUri = "https://localhost:5173/" });
+
+        return SignOut(
+            new AuthenticationProperties { RedirectUri = "/" },
+            CookieAuthenticationDefaults.AuthenticationScheme
+        // opcionalmente também "lab1"/"lab2" se quiser federated signout
+        );
 
         _logger.LogInformation("Logout completo para {User}", user);
         return Ok(new { message = "Logout completo e protegido" });

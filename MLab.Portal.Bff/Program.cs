@@ -14,7 +14,7 @@ IdentityModelEventSource.ShowPII = Debugger.IsAttached;
 var builder = WebApplication.CreateBuilder(args);
 
 //
-// CORS
+// ==================== CORS ====================
 //
 var allowedOrigins = builder.Configuration
     .GetSection("Cors:AllowedOrigins")
@@ -29,14 +29,20 @@ builder.Services.AddCors(opt =>
         .AllowCredentials());
 });
 
+builder.Services.AddHttpContextAccessor();
+
 //
-// Autenticação + Cookie seguro
+// ==================== AUTENTICAÇÃO (MULTI-SCHEME) ====================
 //
+var uiLocales = builder.Configuration.GetSection("Authentication")["UiLocales"] ?? "pt-BR";
+
+var lab1Cfg = builder.Configuration.GetSection("AuthenticationLabs:lab1");
+var lab2Cfg = builder.Configuration.GetSection("AuthenticationLabs:lab2");
+
 builder.Services
     .AddAuthentication(options =>
     {
         options.DefaultScheme = CookieAuthenticationDefaults.AuthenticationScheme;
-        options.DefaultChallengeScheme = OpenIdConnectDefaults.AuthenticationScheme;
     })
     .AddCookie(options =>
     {
@@ -47,183 +53,15 @@ builder.Services
         options.SlidingExpiration = true;
         options.ExpireTimeSpan = TimeSpan.FromHours(8);
     })
-    .AddOpenIdConnect(options =>
-    {
-        // Lab(tenant) selecionado via querystring
-        var ctx = builder.Services.BuildServiceProvider()
-            .GetRequiredService<Microsoft.AspNetCore.Http.IHttpContextAccessor>();
-        var lab = ctx.HttpContext.Request.Query["lab"].ToString()?.ToLowerInvariant();
-        
-        var labConfig = builder.Configuration.GetSection($"AuthenticationLabs:{lab}");
-
-        options.Authority = labConfig["Authority"];
-        options.ClientId = labConfig["ClientId"];
-        options.ClientSecret = labConfig["ClientSecret"];
-
-
-        options.ResponseType = OpenIdConnectResponseType.Code;
-        options.UsePkce = true;
-
-        var cfg = builder.Configuration.GetSection("Authentication");
-
-        options.CallbackPath = cfg["CallbackPath"];
-        options.SignedOutCallbackPath = cfg["SignedOutCallbackPath"];
-        options.GetClaimsFromUserInfoEndpoint = true;
-        options.SaveTokens = false;
-
-        // Scopes
-        options.Scope.Clear();
-        foreach (var s in (cfg["Scopes"] ?? "openid profile email").Split(' '))
-            if (!string.IsNullOrWhiteSpace(s))
-                options.Scope.Add(s.Trim());
-
-        // Claims
-        options.TokenValidationParameters.NameClaimType = "name";
-        options.TokenValidationParameters.RoleClaimType = ClaimTypes.Role;
-
-        var ui = cfg["UiLocales"];
-
-        //
-        // EVENTOS PERSONALIZADOS
-        //
-        options.Events = new OpenIdConnectEvents
-        {
-            //
-            // 1) LOGIN (REDIRECT PARA O CIAM)
-            //
-            OnRedirectToIdentityProvider = ctx =>
-            {
-                var http = ctx.HttpContext;
-
-                // Lab via querystring
-                var lab = http.Request.Query["lab"].ToString()?.ToLowerInvariant();
-                if (string.IsNullOrWhiteSpace(lab))
-                {
-                    http.Response.StatusCode = 400;
-                    return http.Response.WriteAsync("Erro: parâmetro 'lab' é obrigatório (ex: /auth/login?lab=lab1)");
-                }
-
-                // Guarda o lab em cookie — necessário para o callback
-                http.Response.Cookies.Append("mlab_lab", lab, new CookieOptions
-                {
-                    HttpOnly = true,
-                    Secure = true,
-                    SameSite = SameSiteMode.None,
-                    Path = "/"
-                });
-
-                // Lê config do lab
-                var labConfig = builder.Configuration.GetSection($"AuthenticationLabs:{lab}");
-                var authority = labConfig["Authority"];
-                var clientId = labConfig["ClientId"];
-                var clientSecret = labConfig["ClientSecret"];
-
-                if (string.IsNullOrEmpty(authority) || string.IsNullOrEmpty(clientId))
-                {
-                    http.Response.StatusCode = 400;
-                    return http.Response.WriteAsync($"Erro: laboratório '{lab}' não possui configuração válida.");
-                }
-
-                // Ajuste do endpoint de autorização
-                var issuer = authority.Replace("/v2.0", "/oauth2/v2.0/authorize");
-
-                // Override dos valores reais
-                ctx.ProtocolMessage.AuthorizationEndpoint = authority;
-                ctx.ProtocolMessage.IssuerAddress = issuer;
-                ctx.ProtocolMessage.ClientId = clientId;
-                ctx.ProtocolMessage.SetParameter("client_secret", clientSecret);
-
-                //
-                // Forçar login SEM KMSI + tela limpa
-                //
-                //ctx.ProtocolMessage.Prompt = "login consent";
-                //AADSTS90023: Unsupported 'prompt' value.
-                ctx.ProtocolMessage.Prompt = "login";
-
-                ctx.ProtocolMessage.SetParameter("login_hint", "");
-                ctx.ProtocolMessage.SetParameter("domain_hint", "none");
-                ctx.ProtocolMessage.SetParameter("max_age", "0");
-                ctx.ProtocolMessage.SetParameter("remember", "false");
-                ctx.ProtocolMessage.SetParameter("suppress_prompt", "true");
-                ctx.ProtocolMessage.SetParameter("auth_method", "refresh_session");
-                ctx.ProtocolMessage.SetParameter("disable_kmsi", "true");
-                ctx.ProtocolMessage.SetParameter("disable_kmsi", "1");
-
-                ctx.ProtocolMessage.SetParameter("ui_locales", ui);
-                ctx.ProtocolMessage.SetParameter("mkt", ui);
-
-                // Evita KMSI em form_post
-                ctx.ProtocolMessage.ResponseMode = "query";
-
-                Console.WriteLine($"🔹 Login iniciado para LAB: {lab}");
-
-                return Task.CompletedTask;
-            },
-
-            //
-            // 2) CALLBACK (TROCA DO AUTH CODE POR TOKEN)
-            //
-            OnAuthorizationCodeReceived = ctx =>
-            {
-                var http = ctx.HttpContext;
-
-                // Recupera o lab salvo no cookie
-                var lab = http.Request.Cookies["mlab_lab"]?.ToLowerInvariant();
-
-                if (string.IsNullOrWhiteSpace(lab))
-                {
-                    throw new Exception("Não foi possível determinar o lab no callback.");
-                }
-
-                var labConfig = builder.Configuration.GetSection($"AuthenticationLabs:{lab}");
-                var clientId = labConfig["ClientId"];
-                var clientSecret = labConfig["ClientSecret"];
-
-                // Override REAL usado no token endpoint
-                ctx.TokenEndpointRequest.ClientId = clientId;
-                ctx.TokenEndpointRequest.ClientSecret = clientSecret;
-
-                Console.WriteLine($"🔹 Callback autorizado pelo LAB: {lab}");
-
-                return Task.CompletedTask;
-            },
-
-            //
-            // 3) LOGOUT
-            //
-            OnRedirectToIdentityProviderForSignOut = ctx =>
-            {
-                ctx.ProtocolMessage.SetParameter("ui_locales", ui);
-                ctx.ProtocolMessage.SetParameter("mkt", ui);
-                return Task.CompletedTask;
-            },
-
-            //
-            // 4) TOKEN VALIDADO
-            //
-            OnTokenValidated = ctx =>
-            {
-                var http = ctx.HttpContext;
-                var xsrfToken = Guid.NewGuid().ToString("N");
-
-                http.Response.Cookies.Append("XSRF-TOKEN", xsrfToken, new CookieOptions
-                {
-                    HttpOnly = false,
-                    Secure = true,
-                    SameSite = SameSiteMode.None,
-                    Path = "/"
-                });
-
-                return Task.CompletedTask;
-            }
-        };
-    });
+    .AddOpenIdConnect("lab1", opt => ConfigureLabScheme(opt, lab1Cfg, uiLocales, "lab1"))
+    .AddOpenIdConnect("lab2", opt => ConfigureLabScheme(opt, lab2Cfg, uiLocales, "lab2"));
 
 //
-// MVC + Swagger + AI
+// ==================== MVC + RATE LIMITER + SWAGGER ====================
 //
 builder.Services.AddAuthorization();
 builder.Services.AddControllers(o => o.Filters.Add<ValidateAntiCsrfFilter>());
+
 builder.Services.AddRateLimiter(_ => _.AddFixedWindowLimiter("default", o =>
 {
     o.PermitLimit = 30;
@@ -231,6 +69,7 @@ builder.Services.AddRateLimiter(_ => _.AddFixedWindowLimiter("default", o =>
     o.QueueProcessingOrder = QueueProcessingOrder.OldestFirst;
     o.QueueLimit = 5;
 }));
+
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 builder.Services.AddApplicationInsightsTelemetry();
@@ -238,8 +77,7 @@ builder.Services.AddApplicationInsightsTelemetry();
 var app = builder.Build();
 
 //
-// Forward headers — essencial para ngrok/containers
-//
+// ==================== FORWARDED HEADERS ====================
 app.UseForwardedHeaders(new ForwardedHeadersOptions
 {
     ForwardedHeaders = ForwardedHeaders.XForwardedProto | ForwardedHeaders.XForwardedFor,
@@ -249,6 +87,8 @@ app.UseForwardedHeaders(new ForwardedHeadersOptions
     KnownProxies = { }
 });
 
+//
+// ==================== SWAGGER ====================
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
@@ -258,8 +98,7 @@ if (app.Environment.IsDevelopment())
 app.UseHttpsRedirection();
 
 //
-// Segurança
-//
+// ==================== CABEÇALHOS DE SEGURANÇA ====================
 app.Use((context, next) =>
 {
     var h = context.Response.Headers;
@@ -276,10 +115,146 @@ app.Use((context, next) =>
 if (!app.Environment.IsDevelopment())
     app.UseHsts();
 
+//
+// ==================== PIPELINE ====================
 app.UseRateLimiter();
 app.UseCors("app");
 app.UseAuthentication();
 app.UseAuthorization();
+
 app.MapControllers();
 
 app.Run();
+
+
+//
+// ======================================================================
+// ============ FUNÇÃO CENTRAL PARA CONFIGURAR CADA SCHEME OIDC =========
+// ======================================================================
+static void ConfigureLabScheme(OpenIdConnectOptions options, IConfiguration cfg, string uiLocales, string labName)
+{
+    var authority = cfg["Authority"];
+    var clientId = cfg["ClientId"];
+    var clientSecret = cfg["ClientSecret"];
+
+    if (string.IsNullOrWhiteSpace(authority) || string.IsNullOrWhiteSpace(clientId))
+        throw new InvalidOperationException("Configuração inválida: Authority ou ClientId ausentes.");
+
+    options.Authority = authority;
+    options.ClientId = clientId;
+    options.ClientSecret = clientSecret;
+
+    options.ResponseType = OpenIdConnectResponseType.Code;
+    options.UsePkce = true;
+
+    // Callback único para todos os labs
+    //options.CallbackPath = "/signin-oidc";
+    //options.SignedOutCallbackPath = "/signout-callback-oidc";
+
+    options.GetClaimsFromUserInfoEndpoint = true;
+    options.SaveTokens = false;
+
+    // Scopes
+    options.Scope.Clear();
+    foreach (var s in ("openid profile email").Split(' ', StringSplitOptions.RemoveEmptyEntries))
+        options.Scope.Add(s.Trim());
+
+    // Claims
+    options.TokenValidationParameters.NameClaimType = "name";
+    options.TokenValidationParameters.RoleClaimType = ClaimTypes.Role;
+
+    // Callback 
+    options.CallbackPath = $"/signin-oidc/{labName}";
+    options.SignedOutCallbackPath = $"/signout-callback-oidc/{labName}";
+
+    //
+    // ==================== EVENTOS PERSONALIZADOS ====================
+    //
+    options.Events = new OpenIdConnectEvents
+    {
+        //
+        // ----- LOGIN -----
+        //
+        OnRedirectToIdentityProvider = ctx =>
+        {
+            var http = ctx.HttpContext;
+            var labName = ctx.Scheme.Name.ToLowerInvariant(); // lab1 ou lab2
+
+            // Cookie com o nome do lab
+            http.Response.Cookies.Append("mlab_lab", labName, new CookieOptions
+            {
+                HttpOnly = true,
+                Secure = true,
+                SameSite = SameSiteMode.None,
+                Path = "/"
+            });
+
+            // Ajuste do endpoint
+            var issuer = authority.Replace("/v2.0", "/oauth2/v2.0/authorize");
+            ctx.ProtocolMessage.AuthorizationEndpoint = authority;
+            ctx.ProtocolMessage.IssuerAddress = issuer;
+            ctx.ProtocolMessage.ClientId = clientId;
+            ctx.ProtocolMessage.SetParameter("client_secret", clientSecret);
+
+            // Forçar login SEM KMSI
+            ctx.ProtocolMessage.Prompt = "login";
+            ctx.ProtocolMessage.SetParameter("login_hint", "");
+            ctx.ProtocolMessage.SetParameter("domain_hint", "none");
+            ctx.ProtocolMessage.SetParameter("max_age", "0");
+            ctx.ProtocolMessage.SetParameter("remember", "false");
+            ctx.ProtocolMessage.SetParameter("suppress_prompt", "true");
+            ctx.ProtocolMessage.SetParameter("auth_method", "refresh_session");
+            ctx.ProtocolMessage.SetParameter("disable_kmsi", "true");
+            ctx.ProtocolMessage.SetParameter("disable_kmsi", "1");
+
+            // Idioma
+            ctx.ProtocolMessage.SetParameter("ui_locales", uiLocales);
+            ctx.ProtocolMessage.SetParameter("mkt", uiLocales);
+
+            ctx.ProtocolMessage.ResponseMode = "query";
+
+            Console.WriteLine($"🔹 Login: scheme={labName}");
+
+            return Task.CompletedTask;
+        },
+
+        //
+        // ----- LOGOUT -----
+        //
+        OnRedirectToIdentityProviderForSignOut = ctx =>
+        {
+            ctx.ProtocolMessage.SetParameter("ui_locales", uiLocales);
+            ctx.ProtocolMessage.SetParameter("mkt", uiLocales);
+            return Task.CompletedTask;
+        },
+
+        //
+        // ----- TOKEN VALIDATED -----
+        //
+        OnTokenValidated = ctx =>
+        {
+            var http = ctx.HttpContext;
+            var labName = ctx.Scheme.Name.ToLowerInvariant();
+
+            // Claim com o lab
+            if (ctx.Principal?.Identity is ClaimsIdentity id)
+            {
+                id.AddClaim(new Claim("mlab_lab", labName));
+            }
+
+            // XSRF-TOKEN
+            var xsrfToken = Guid.NewGuid().ToString("N");
+            http.Response.Cookies.Append("XSRF-TOKEN", xsrfToken, new CookieOptions
+            {
+                HttpOnly = false,
+                Secure = true,
+                SameSite = SameSiteMode.None,
+                Path = "/"
+            });
+
+            Console.WriteLine($"🔹 Token validado: scheme={labName}");
+
+            return Task.CompletedTask;
+        }
+    };
+}
