@@ -1,7 +1,7 @@
 ﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
-namespace PortalCliBackend.Controllers;
+namespace MLab.Portal.Bff.Controllers;
 
 [ApiController]
 [Route("api/diagnostics")]

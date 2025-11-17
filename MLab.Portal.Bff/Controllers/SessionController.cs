@@ -2,7 +2,7 @@
 using Microsoft.AspNetCore.Mvc;
 using System.Security.Claims;
 
-namespace PortalCliBackend.Controllers;
+namespace MLab.Portal.Bff.Controllers;
 
 [ApiController]
 [Route("session")]

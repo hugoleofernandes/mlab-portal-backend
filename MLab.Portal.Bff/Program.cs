@@ -8,12 +8,17 @@ using MLab.Portal.Bff.Security.Csrf;
 using System.Diagnostics;
 using System.Security.Claims;
 using System.Threading.RateLimiting;
+using Microsoft.AspNetCore.DataProtection;
+using Azure.Storage.Blobs;
+using Azure.Extensions.AspNetCore.DataProtection.Blobs;
+using Azure.Identity;
+using MLab.Portal.Bff;
 
 IdentityModelEventSource.ShowPII = Debugger.IsAttached;
 
 var builder = WebApplication.CreateBuilder(args);
 
-//
+//  
 // ==================== CORS ====================
 //
 var allowedOrigins = builder.Configuration
@@ -31,11 +36,45 @@ builder.Services.AddCors(opt =>
 
 builder.Services.AddHttpContextAccessor();
 
+
+//
+// ==================== DATA PROTECTION KEY RING (Open ID Connection) ====================
+//
+var storageCfg = builder.Configuration.GetSection("Storage");
+var storageConn = storageCfg["ConnectionString"];
+var dataCfg = builder.Configuration.GetSection("DataProtection");
+var blobContainerName = dataCfg["BlobContainer"];
+var blobName = dataCfg["BlobName"];
+var accountUrl = dataCfg["AccountUrl"];
+
+BlobClient blobClient;
+if (builder.Environment.IsDevelopment())
+{
+    Console.WriteLine("🔵 DataProtection: Localhost → Connection String");
+    blobClient = new BlobClient(storageConn, blobContainerName, blobName);
+}
+else
+{
+    Console.WriteLine($"🟢 DataProtection: {builder.Environment.EnvironmentName} → Managed Identity");
+
+    var blobUri = new Uri($"{accountUrl}/{blobContainerName}/{blobName}");
+    var credential = new DefaultAzureCredential();
+    blobClient = new BlobClient(blobUri, credential);
+}
+
+builder.Services.AddDataProtection()
+    .PersistKeysToAzureBlobStorage(blobClient) 
+    .SetApplicationName("MLabPortalBFF");
+
+
+
+
 //
 // ==================== AUTENTICAÇÃO (MULTI-SCHEME) ====================
 //
 var uiLocales = builder.Configuration.GetSection("Authentication")["UiLocales"] ?? "pt-BR";
 
+var authCfg = builder.Configuration.GetSection("Authentication");
 var lab1Cfg = builder.Configuration.GetSection("AuthenticationLabs:lab1");
 var lab2Cfg = builder.Configuration.GetSection("AuthenticationLabs:lab2");
 
@@ -53,8 +92,8 @@ builder.Services
         options.SlidingExpiration = true;
         options.ExpireTimeSpan = TimeSpan.FromHours(8);
     })
-    .AddOpenIdConnect("lab1", opt => ConfigureLabScheme(opt, lab1Cfg, uiLocales, "lab1"))
-    .AddOpenIdConnect("lab2", opt => ConfigureLabScheme(opt, lab2Cfg, uiLocales, "lab2"));
+    .AddOpenIdConnect("lab1", opt => ConfigureLabScheme(opt, authCfg, lab1Cfg, uiLocales, "lab1"))
+    .AddOpenIdConnect("lab2", opt => ConfigureLabScheme(opt, authCfg, lab2Cfg, uiLocales, "lab2"));
 
 //
 // ==================== MVC + RATE LIMITER + SWAGGER ====================
@@ -69,6 +108,15 @@ builder.Services.AddRateLimiter(_ => _.AddFixedWindowLimiter("default", o =>
     o.QueueProcessingOrder = QueueProcessingOrder.OldestFirst;
     o.QueueLimit = 5;
 }));
+
+
+
+var frontendBaseUrl = builder.Configuration["Frontend:BaseUrl"];
+builder.Services.AddSingleton(new FrontendConfig
+{
+    BaseUrl = frontendBaseUrl
+});
+
 
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
@@ -131,11 +179,12 @@ app.Run();
 // ======================================================================
 // ============ FUNÇÃO CENTRAL PARA CONFIGURAR CADA SCHEME OIDC =========
 // ======================================================================
-static void ConfigureLabScheme(OpenIdConnectOptions options, IConfiguration cfg, string uiLocales, string labName)
+static void ConfigureLabScheme(OpenIdConnectOptions options, IConfiguration authCfg, IConfiguration labCfg, string uiLocales, string labName)
 {
-    var authority = cfg["Authority"];
-    var clientId = cfg["ClientId"];
-    var clientSecret = cfg["ClientSecret"];
+    var authority = labCfg["Authority"];
+    var clientId = labCfg["ClientId"];
+    var clientSecret = labCfg["ClientSecret"];
+
 
     if (string.IsNullOrWhiteSpace(authority) || string.IsNullOrWhiteSpace(clientId))
         throw new InvalidOperationException("Configuração inválida: Authority ou ClientId ausentes.");
@@ -147,16 +196,13 @@ static void ConfigureLabScheme(OpenIdConnectOptions options, IConfiguration cfg,
     options.ResponseType = OpenIdConnectResponseType.Code;
     options.UsePkce = true;
 
-    // Callback único para todos os labs
-    //options.CallbackPath = "/signin-oidc";
-    //options.SignedOutCallbackPath = "/signout-callback-oidc";
-
     options.GetClaimsFromUserInfoEndpoint = true;
     options.SaveTokens = false;
 
     // Scopes
+    var scopes = authCfg["Scopes"] ?? "openid profile email";
     options.Scope.Clear();
-    foreach (var s in ("openid profile email").Split(' ', StringSplitOptions.RemoveEmptyEntries))
+    foreach (var s in (scopes).Split(' ', StringSplitOptions.RemoveEmptyEntries))
         options.Scope.Add(s.Trim());
 
     // Claims
@@ -164,8 +210,10 @@ static void ConfigureLabScheme(OpenIdConnectOptions options, IConfiguration cfg,
     options.TokenValidationParameters.RoleClaimType = ClaimTypes.Role;
 
     // Callback 
-    options.CallbackPath = $"/signin-oidc/{labName}";
-    options.SignedOutCallbackPath = $"/signout-callback-oidc/{labName}";
+    var callbackTemplate = authCfg["CallbackPath"];
+    var signedOutTemplate = authCfg["SignedOutCallbackPath"];
+    options.CallbackPath = callbackTemplate?.Replace("{lab}", labName);
+    options.SignedOutCallbackPath = signedOutTemplate?.Replace("{lab}", labName);
 
     //
     // ==================== EVENTOS PERSONALIZADOS ====================
