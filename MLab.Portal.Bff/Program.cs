@@ -10,7 +10,6 @@ using System.Security.Claims;
 using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.DataProtection;
 using Azure.Storage.Blobs;
-using Azure.Extensions.AspNetCore.DataProtection.Blobs;
 using Azure.Identity;
 using MLab.Portal.Bff;
 
@@ -75,25 +74,39 @@ builder.Services.AddDataProtection()
 var uiLocales = builder.Configuration.GetSection("Authentication")["UiLocales"] ?? "pt-BR";
 
 var authCfg = builder.Configuration.GetSection("Authentication");
-var lab1Cfg = builder.Configuration.GetSection("AuthenticationLabs:lab1");
-var lab2Cfg = builder.Configuration.GetSection("AuthenticationLabs:lab2");
+//var lab1Cfg = builder.Configuration.GetSection("AuthenticationLabs:lab1");
+//var lab2Cfg = builder.Configuration.GetSection("AuthenticationLabs:lab2");
 
-builder.Services
-    .AddAuthentication(options =>
+
+// Cria o AuthenticationBuilder
+var authBuilder = builder.Services.AddAuthentication(options =>
+{
+    options.DefaultScheme = CookieAuthenticationDefaults.AuthenticationScheme;
+});
+
+// Adiciona cookie
+authBuilder.AddCookie(options =>
+{
+    options.Cookie.Name = ".mlab.portal.session";
+    options.Cookie.HttpOnly = true;
+    options.Cookie.SecurePolicy = CookieSecurePolicy.Always;
+    options.Cookie.SameSite = SameSiteMode.None;
+    options.SlidingExpiration = true;
+    options.ExpireTimeSpan = TimeSpan.FromHours(8);
+});
+
+// adiciona TODOS os schemes dinâmicos de OIDC
+var labsSection = builder.Configuration.GetSection("AuthenticationLabs");
+var labs = labsSection.GetChildren();
+foreach (var lab in labs)
+{
+    string labName = lab.Key;
+
+    authBuilder.AddOpenIdConnect(labName, options =>
     {
-        options.DefaultScheme = CookieAuthenticationDefaults.AuthenticationScheme;
-    })
-    .AddCookie(options =>
-    {
-        options.Cookie.Name = ".mlab.portal.session";
-        options.Cookie.HttpOnly = true;
-        options.Cookie.SecurePolicy = CookieSecurePolicy.Always;
-        options.Cookie.SameSite = SameSiteMode.None;
-        options.SlidingExpiration = true;
-        options.ExpireTimeSpan = TimeSpan.FromHours(8);
-    })
-    .AddOpenIdConnect("lab1", opt => ConfigureLabScheme(opt, authCfg, lab1Cfg, uiLocales, "lab1"))
-    .AddOpenIdConnect("lab2", opt => ConfigureLabScheme(opt, authCfg, lab2Cfg, uiLocales, "lab2"));
+        ConfigureLabScheme(options, authCfg, lab, uiLocales, labName);
+    });
+}
 
 //
 // ==================== MVC + RATE LIMITER + SWAGGER ====================

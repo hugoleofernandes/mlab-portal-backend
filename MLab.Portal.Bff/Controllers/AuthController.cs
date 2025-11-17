@@ -19,9 +19,11 @@ public class AuthController : ControllerBase
     }
 
     [HttpGet("login")]
-    public IActionResult Login(string lab)
+    public IActionResult Login(string lab, [FromServices] IConfiguration config)
     {
-        if (lab != "lab1" && lab != "lab2")
+        var labs = config.GetSection("AuthenticationLabs").GetChildren().Select(c => c.Key);
+
+        if (!labs.Contains(lab))
             return BadRequest("lab inválido");
 
         string home = $"{_frontConfig.BaseUrl}/app/home";
