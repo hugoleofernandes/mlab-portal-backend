@@ -4,6 +4,16 @@ using System.Security.Claims;
 
 namespace MLab.Portal.Bff.Controllers;
 
+/// <summary>
+/// Exposes session-related endpoints for the BFF. These endpoints allow the frontend
+/// to retrieve authenticated user data (/session/me) and debug claims during development
+/// (/session/debug).
+/// 
+/// This controller is the main integration point for the frontend to verify whether 
+/// the authentication cookie is valid and establish the user's logged-in state.
+/// </summary>
+
+
 [ApiController]
 [Route("session")]
 public class SessionController : ControllerBase

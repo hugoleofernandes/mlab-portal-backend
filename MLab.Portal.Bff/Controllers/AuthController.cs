@@ -1,21 +1,37 @@
-﻿using Microsoft.AspNetCore.Authorization;
-using Microsoft.AspNetCore.Authentication;
+﻿using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Options;
+using MLab.Portal.Bff.Configuration;
 
 namespace MLab.Portal.Bff.Controllers;
+
+/// <summary>
+/// Responsible for initiating login and logout flows through the BFF.
+/// The frontend never interacts directly with the identity provider — only with this controller.
+/// 
+/// This design allows the BFF to:
+/// - control the RedirectUri sent to the Hosted UI,
+/// - manage session cookies securely,
+/// - avoid exposing client secrets to the frontend,
+/// - implement multi-tenant authentication based on the selected lab.
+/// 
+/// The BFF acts as the security boundary between the frontend and the identity system.
+/// </summary>
+
 
 [ApiController]
 [Route("auth")]
 public class AuthController : ControllerBase
 {
-    private readonly FrontendConfig _frontConfig;
     private readonly ILogger<AuthController> _logger;
+    private readonly FrontendConfig _frontConfig;
 
-    public AuthController(ILogger<AuthController> logger, FrontendConfig front)
+    public AuthController(ILogger<AuthController> logger, IOptions<FrontendConfig> frontOptions)
     {
         _logger = logger;
-        _frontConfig = front;
+        _frontConfig = frontOptions.Value;
     }
 
     [HttpGet("login")]
