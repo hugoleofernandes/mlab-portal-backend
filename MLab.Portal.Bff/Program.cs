@@ -1,6 +1,7 @@
 ﻿using Microsoft.IdentityModel.Logging;
 using MLab.Portal.Bff.Configuration;
 using MLab.Portal.Bff.Security.Cors;
+using MLab.Portal.Bff.Security.Csrf;
 using MLab.Portal.Bff.Security.Headers;
 using MLab.Portal.Bff.Security.OidcAuthentication;
 using MLab.Portal.Bff.Security.RateLimit;
@@ -24,8 +25,13 @@ builder.Services.AddBlobDataProtection(builder.Configuration, builder.Environmen
 // ==================== AUTHENTICATION ====================
 builder.Services.AddOidcMultiTenantAuthentication(builder.Configuration);
 
-// ==================== MVC & RATE LIMITING ====================
-builder.Services.AddControllers();
+// ==================== MVC & CSRF & RATE LIMITING ====================
+builder.Services.AddControllers(options =>
+{
+    // Adiciona o filtro global de CSRF
+    options.Filters.Add<ValidateAntiCsrfFilter>();
+});
+
 builder.Services.AddAuthorization();
 builder.Services.AddRateLimiting(builder.Configuration);
 
