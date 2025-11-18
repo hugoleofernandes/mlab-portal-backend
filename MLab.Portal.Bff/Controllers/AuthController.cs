@@ -52,24 +52,54 @@ public class AuthController : ControllerBase
         return Challenge(props, lab);
     }
 
-    [HttpPost("logout")]
+    [HttpGet("logout")]
     [Authorize]
     public async Task<IActionResult> Logout()
     {
-        var user = HttpContext.User.Identity?.Name ?? "Desconhecido";
-        _logger.LogInformation("Logout iniciado por {User} às {Time}", user, DateTimeOffset.UtcNow);
+        var lab = HttpContext.Request.Cookies["mlab_lab"]?.ToLower();
 
-        //await HttpContext.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
-        //await HttpContext.SignOutAsync(OpenIdConnectDefaults.AuthenticationScheme,
-        //    new AuthenticationProperties { RedirectUri = "https://localhost:5173/" });
+        if (string.IsNullOrWhiteSpace(lab))
+            return Redirect(_frontConfig.BaseUrl);
 
-        return SignOut(
-            new AuthenticationProperties { RedirectUri = "/" },
-            CookieAuthenticationDefaults.AuthenticationScheme
-        // opcionalmente também "lab1"/"lab2" se quiser federated signout
+        // 1. Remove cookie local
+        await HttpContext.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
+
+        // 2. Logout federado no IDP (Azure Entra)
+        await HttpContext.SignOutAsync(
+            lab, // ← esquema correto multi-tenant
+            new AuthenticationProperties
+            {
+                RedirectUri = "/auth/logged-out-callback"
+            }
         );
 
-        //_logger.LogInformation("Logout completo para {User}", user);
-        //return Ok(new { message = "Logout completo e protegido" });
+        return new EmptyResult(); // Azure fará o redirect para /auth/logged-out-callback
+    }
+
+    [AllowAnonymous]
+    [HttpGet("logged-out-callback")]
+    public IActionResult LoggedOutCallback()
+    {
+        // Depois do federated logout, o usuário foi removido do IdP corretamente.
+        // Agora podemos devolver a SPA.
+        return Redirect($"{_frontConfig.BaseUrl}/");
+    }
+
+    [HttpPost("logout-spa")]
+    [Authorize]
+    public IActionResult LogoutSpa()
+    {
+        // Retorna ao SPA a URL para iniciar o federated logout
+        var federatedUrl = $"{Request.Scheme}://{Request.Host}/auth/logout";
+
+        return Ok(new { redirect = federatedUrl });
+    }
+
+    [HttpPost("logout-spa-only")]
+    [Authorize]
+    public async Task<IActionResult> LogoutSpaOnly()
+    {
+        await HttpContext.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
+        return Ok(new { redirect = "/" }); // volta para login direto
     }
 }

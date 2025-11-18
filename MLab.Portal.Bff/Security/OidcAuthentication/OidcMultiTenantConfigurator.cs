@@ -61,7 +61,7 @@ public static class OidcMultiTenantConfigurator
         // ==================== CALLBACKS ====================
         //
         options.CallbackPath = authCfg["CallbackPath"]?.Replace("{lab}", labName);
-        options.SignedOutCallbackPath = authCfg["SignedOutCallbackPath"]?.Replace("{lab}", labName);
+        //options.SignedOutCallbackPath = authCfg["SignedOutCallbackPath"]; // vamos tratar o callback de forma manual devido seu um SPA
 
 
         //
@@ -130,6 +130,14 @@ public static class OidcMultiTenantConfigurator
             {
                 ctx.ProtocolMessage.SetParameter("ui_locales", uiLocales);
                 ctx.ProtocolMessage.SetParameter("mkt", uiLocales);
+
+                var email = ctx.HttpContext.User.FindFirst("preferred_username")?.Value;
+
+                if (!string.IsNullOrWhiteSpace(email))
+                {
+                    ctx.ProtocolMessage.SetParameter("logout_hint", email);
+                }
+
                 return Task.CompletedTask;
             },
 

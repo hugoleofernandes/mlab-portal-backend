@@ -15,7 +15,7 @@ namespace MLab.Portal.Bff.Controllers;
 
 
 [ApiController]
-[Route("session")]
+[Route("api/session")]
 public class SessionController : ControllerBase
 {
     [HttpGet("me")]
